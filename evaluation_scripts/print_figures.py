@@ -134,7 +134,8 @@ def _plot_boxplots_with_background(
     show_ylabels=True,
     group_names=None,
     group_lengths=None,
-    fig=None
+    fig=None,
+    plot_type="box"  # "box" or "dot"
 ):
     """
     Internal helper to plot horizontal boxplots with background color regions per row.
@@ -153,6 +154,7 @@ def _plot_boxplots_with_background(
         group_names (list, optional): Names of groups for grouped boxplots.
         group_lengths (list, optional): Lengths of each group.
         fig (matplotlib.figure.Figure, optional): Figure object for setting suptitle.
+        plot_type (str): "box" (default) draws boxplots, "dot" draws dot-plots (scatter with jitter).
     """
 
     num_plots = len(boxplot_data)
@@ -178,28 +180,91 @@ def _plot_boxplots_with_background(
             ax.axvspan(3, 5, ymin=(y_bottom-0.5)/num_plots, ymax=(y_top-0.5)/num_plots, color='#ffcccc', alpha=0.4)
 
     # Create horizontal boxplots
-    bplots = ax.boxplot(
-        boxplot_data,
-        vert=False,
-        patch_artist=True,
-        labels=ytick_labels if show_ylabels else [''] * len(ytick_labels),
-        showmeans=True,
-        meanline=True,
-        medianprops={'linewidth': 3, 'color': 'red', 'linestyle': 'solid'},
-        meanprops={'linewidth': 3, 'color': 'orange', 'linestyle': 'solid'},
-        widths=0.5
-    )
+    # bplots = ax.boxplot(
+    #     boxplot_data,
+    #     vert=False,
+    #     patch_artist=True,
+    #     labels=ytick_labels if show_ylabels else [''] * len(ytick_labels),
+    #     showmeans=True,
+    #     meanline=True,
+    #     medianprops={'linewidth': 3, 'color': 'red', 'linestyle': 'solid'},
+    #     meanprops={'linewidth': 3, 'color': 'orange', 'linestyle': 'solid'},
+    #     widths=0.5
+    # )
 
-    if show_ylabels:
-        ax.set_yticklabels(ytick_labels, fontsize=10)
+    # if show_ylabels:
+    #     ax.set_yticklabels(ytick_labels, fontsize=10)
+    # else:
+    #     ax.set_yticklabels([])
+
+        rng = np.random.default_rng(seed=0)  # deterministic jitter
+    jitter_scale = 0.08 if num_plots <= 10 else max(0.03, 0.08 * 10 / num_plots)
+
+ # Branch: boxplots or dot-plots
+    if plot_type == "box":
+        # Create horizontal boxplots
+        bplots = ax.boxplot(
+            boxplot_data,
+            vert=False,
+            patch_artist=True,
+            labels=ytick_labels if show_ylabels else [''] * len(ytick_labels),
+            showmeans=True,
+            meanline=True,
+            medianprops={'linewidth': 3, 'color': 'red', 'linestyle': 'solid'},
+            meanprops={'linewidth': 3, 'color': 'orange', 'linestyle': 'solid'},
+            widths=0.5
+        )
+
+        # Set y-labels (boxplot already used labels but ensure font size)
+        if show_ylabels:
+            ax.set_yticklabels(ytick_labels, fontsize=10)
+        else:
+            ax.set_yticklabels([])
+
     else:
-        ax.set_yticklabels([])
+        # Dot-plot implementation (scatter with vertical jitter)
+        rng = np.random.default_rng(seed=0)  # deterministic jitter
+        jitter_scale = 0.08 if num_plots <= 10 else max(0.03, 0.08 * 10 / num_plots)
+
+        y_positions = []
+        for i, series in enumerate(boxplot_data, start=1):
+            data = np.array(series.dropna(), dtype=float)
+            if data.size > 0:
+                jitter = rng.normal(0, jitter_scale, size=data.size)
+                ax.scatter(
+                    data, np.full(data.shape, i) + jitter,
+                    color='black',
+                    alpha=0.55,
+                    s=18,
+                    linewidths=0
+                )
+            y_positions.append(i)
+
+        # Configure y-ticks / labels for dot plot
+        if show_ylabels:
+            ax.set_yticks(y_positions)
+            ax.set_yticklabels(ytick_labels, fontsize=10)
+        else:
+            ax.set_yticks(y_positions)
+            ax.set_yticklabels([''] * len(y_positions))
 
     ax.set_xticks(LIKERT_TICKS)
     ax.set_xticklabels(LIKERT_LABELS, rotation=0)
 
-    # Annotate mean and variance for each boxplot
-    for i, (mean, var) in enumerate(zip(means, variances), start=1):
+    # Annotate mean and variance, and draw mean/median markers for both plot types
+    for i, (mean, var, series) in enumerate(zip(means, variances, boxplot_data), start=1):
+        # mean/median markers (computed from series to be consistent)
+        try:
+            median = np.nanmedian(np.array(series.dropna(), dtype=float))
+        except Exception:
+            median = np.nan
+
+        if not np.isnan(mean):
+            ax.plot(mean, i, marker='D', color='orange', markersize=8, label='_nolegend_')
+        if not np.isnan(median):
+            ax.plot(median, i, marker='s', color='red', markersize=6, label='_nolegend_')
+
+        # right-side annotation
         if not np.isnan(mean):
             ax.text(LIKERT_TICKS[-1] + 0.3, i, f"mean: {mean:.2f}\nvar: {var:.2f}", va='center', fontsize=10)
 
@@ -270,7 +335,8 @@ def generate_pdf_with_boxplots(
     column_description_dict=None,
     overall_title=None,
     couting_factor=None,
-    groups=None
+    groups=None,
+    plot_type="box"  # "box" or "dot"
 ):
     """
     Generates a PDF with one row per column: description (or name), mean, variance, and a horizontal box plot.
@@ -367,12 +433,13 @@ def generate_pdf_with_boxplots(
         show_ylabels=True,
         group_names=group_names,
         group_lengths=group_lengths,
-        fig=fig
+        fig=fig,
+        plot_type=plot_type
     )
 
     with PdfPages(output_pdf) as pdf:
         pdf.savefig(fig, bbox_inches='tight')
-        fig.savefig(output_pdf.replace('.pdf', '.png'), bbox_inches='tight')
+        fig.savefig(output_pdf.replace('.pdf', '.svg'), bbox_inches='tight')
     plt.close(fig)
 
 def generate_pdf_with_boxplot_for_series(
@@ -427,7 +494,7 @@ def generate_pdf_with_boxplot_for_series(
 
     with PdfPages(output_pdf) as pdf:
         pdf.savefig(fig, bbox_inches='tight')
-        fig.savefig(output_pdf.replace('.pdf', '.png'), bbox_inches='tight')
+        fig.savefig(output_pdf.replace('.pdf', '.svg'), bbox_inches='tight')
     plt.close(fig)
 
 def generate_pdf_sus(sus_input, output_pdf, title=None):
@@ -449,38 +516,44 @@ def generate_pdf_sus(sus_input, output_pdf, title=None):
     else:
         sus_dict = {title: sus_input}
 
-    # Prepare data
-    boxplot_data = []
-    ytick_labels = []
+    # Prepare cleaned data, means, variances, and n per group
+    series_list = []
+    labels = []
     means = []
     variances = []
+    ns = []
     n_answers_max = 0
 
     for label, series in sus_dict.items():
         sus_clean = series.dropna()
-        n_answers = int(sus_clean.shape[0])
-        if n_answers > n_answers_max:
-            n_answers_max = n_answers
-        boxplot_data.append(sus_clean)
-        ytick_labels.append(f"{label} (n={n_answers})")
-        means.append(sus_clean.mean())
-        variances.append(sus_clean.var())
+        n = int(sus_clean.shape[0])
+        if n > n_answers_max:
+            n_answers_max = n
+        series_list.append(sus_clean)
+        labels.append(f"{label} (n={n})")
+        means.append(sus_clean.mean() if n > 0 else np.nan)
+        variances.append(sus_clean.var() if n > 0 else np.nan)
+        ns.append(n)
 
-    num_plots = len(boxplot_data)
-    fig_height = max(2.5, .6 * num_plots + 1.5)
+    num_plots = len(series_list)
+    fig_height = max(2.5, 0.6 * num_plots + 1.5)
     fig, ax = plt.subplots(figsize=(10, fig_height))
 
+    # FIX: lock vertical mapping so row centers 1..num_plots align with background bands
+    ax.set_ylim(0.5, num_plots + 0.5)
+    ax.set_autoscaley_on(False)
+
     # If more than one boxplot, draw dotted line after first one
-    if len(sus_dict) > 1:
-        y_offset = len(sus_dict) - 1
+    if len(series_list) > 1:
+        y_offset = len(series_list) - 1
         ax.axhline(
-            y=y_offset + 0.5, 
-            color='black', 
-            linestyle='dotted', 
+            y=y_offset + 0.5,
+            color='black',
+            linestyle='dotted',
             linewidth=1,
-            xmin=-2,  # extend a bit to the left of the axes
+            xmin=-2,
             xmax=1.3,
-            clip_on=False 
+            clip_on=False
         )
 
     # Draw background category regions
@@ -491,21 +564,59 @@ def generate_pdf_sus(sus_input, output_pdf, title=None):
         ax.axvspan(50, 70, ymin=(y_bottom-0.5)/num_plots, ymax=(y_top-0.5)/num_plots, color='#fff2cc', alpha=0.5)
         ax.axvspan(70, 100, ymin=(y_bottom-0.5)/num_plots, ymax=(y_top-0.5)/num_plots, color='#d9ead3', alpha=0.5)
 
-    # Boxplot
-    bplot = ax.boxplot(
-        boxplot_data,
-        vert=False,
-        patch_artist=True,
-        labels=ytick_labels,
-        showmeans=True,        
-        meanline=True,
-        medianprops={'linewidth': 3, 'color': 'red', 'linestyle': 'solid'},
-        meanprops={'linewidth': 3, 'color': 'orange', 'linestyle': 'solid'},
-        widths=0.5
-    )
+    # Deterministic RNG for jitter
+    rng = np.random.default_rng(seed=0)
+    jitter_scale = 0.08 if num_plots <= 10 else max(0.03, 0.08 * 10 / num_plots)
 
-    ax.set_yticklabels(ytick_labels, fontsize=12)
-    ax.set_xlim(0, 100)
+    # Plot each row: dot plot for small n, boxplot otherwise
+    for idx, series in enumerate(series_list, start=1):
+        clean = np.array(series.dropna(), dtype=float)
+        n = ns[idx - 1]
+
+        if n == 0:
+            # nothing to plot; leave an empty row
+            continue
+
+        if n < 20:
+            # Dot-plot with small vertical jitter
+            y = np.full(clean.shape, idx)
+            jitter = rng.normal(0, jitter_scale, size=clean.size) if clean.size > 0 else np.array([])
+            ax.scatter(clean, y + jitter, color='black', alpha=0.65, s=36, linewidths=0)
+        else:
+            # Individual boxplot at the correct y-position
+            # Use positions so boxplot appears on the same row index
+            bplot = ax.boxplot(
+                [clean],
+                positions=[idx],
+                vert=False,
+                patch_artist=True,
+                showmeans=True,
+                meanline=True,
+                medianprops={'linewidth': 3, 'color': 'red', 'linestyle': 'solid'},
+                meanprops={'linewidth': 3, 'color': 'orange', 'linestyle': 'solid'},
+                widths=0.6
+            )
+            # Optional: style the box facecolor to transparent to match dot-plot aesthetic
+            for patch in bplot.get('boxes', []):
+                patch.set_facecolor('#ffffff')
+                patch.set_alpha(0.6)
+
+        # Plot mean and median markers for every row for consistency
+        mean = means[idx - 1]
+        try:
+            median = np.nanmedian(clean) if clean.size > 0 else np.nan
+        except Exception:
+            median = np.nan
+
+        if not np.isnan(mean):
+            ax.plot(mean, idx, marker='D', color='orange', markersize=8, label='_nolegend_')
+        if not np.isnan(median):
+            ax.plot(median, idx, marker='s', color='red', markersize=6, label='_nolegend_')
+
+    # Y-axis labels and ticks
+    y_positions = list(range(1, num_plots + 1))
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels, fontsize=12)
     for label in ax.get_xticklabels():
         label.set_fontsize(12)
     ax.set_xlabel("SUS Score", fontsize=12)
@@ -514,6 +625,13 @@ def generate_pdf_sus(sus_input, output_pdf, title=None):
             ax.set_title(f"{title} (total n={n_answers_max})", fontsize=14, fontweight='bold')
         else:
             ax.set_title(title, fontsize=14, fontweight='bold')
+
+    # --- ensure no left padding before 0 ---
+    # set the x-limits explicitly and remove x-margin (call after all drawing)
+    ax.set_xlim(0, 100)
+    ax.margins(x=0)            # remove automatic padding
+    ax.set_xmargin(0)         # alternative explicit call
+    ax.set_autoscalex_on(False)
 
     # Annotate mean and variance for each boxplot
     for i, (mean, var) in enumerate(zip(means, variances), start=1):
@@ -564,7 +682,7 @@ def generate_pdf_sus(sus_input, output_pdf, title=None):
     plt.tight_layout()
     with PdfPages(output_pdf) as pdf:
         pdf.savefig(fig, bbox_inches='tight')
-        fig.savefig(output_pdf.replace('.pdf', '.png'), bbox_inches='tight')
+        fig.savefig(output_pdf.replace('.pdf', '.svg'), bbox_inches='tight')
     plt.close(fig)
 
 def plot_column_pie_chart_pdf(df, column, output_pdf, column_description_dict):
@@ -706,7 +824,7 @@ def plot_pie_chart_from_value_counts(value_counts, output_pdf, column_descriptio
     plt.tight_layout()
     with PdfPages(output_pdf) as pdf:
         pdf.savefig(fig, bbox_inches='tight')
-        fig.savefig(output_pdf.replace('.pdf', '.png'), bbox_inches='tight')
+        fig.savefig(output_pdf.replace('.pdf', '.svg'), bbox_inches='tight')
     plt.close(fig)
 
 def plot_yes_counts_bar_chart_pdf(df, columns, column_description_dict, output_pdf, chart_title):
@@ -744,7 +862,7 @@ def plot_yes_counts_bar_chart_pdf(df, columns, column_description_dict, output_p
     plt.tight_layout()
     with PdfPages(output_pdf) as pdf:
         pdf.savefig(fig, bbox_inches='tight')
-        fig.savefig(output_pdf.replace('.pdf', '.png'), bbox_inches='tight')
+        fig.savefig(output_pdf.replace('.pdf', '.svg'), bbox_inches='tight')
     plt.close(fig)
 
 def combine_pdfs_in_folder(folder_path, output_pdf):

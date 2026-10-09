@@ -145,7 +145,8 @@ def save_element_type_boxplots(
     max_series=None,
     title=None,
     xlabel="Element Count",
-    ylabel="Element Type"
+    ylabel="Element Type",
+    plot_type="box"  # "box" (default) or "dot"
 ):
     """
     Creates horizontal boxplots for each column in df_element_type_counts and saves as a PDF.
@@ -160,6 +161,7 @@ def save_element_type_boxplots(
         title (str, optional): Title of the plot.
         xlabel (str, optional): Label for the x-axis.
         ylabel (str, optional): Label for the y-axis.
+        plot_type (str, optional): "box" for boxplots (default) or "dot" for dot-plots.
 
     Output:
         - Saves the figure as both PDF and PNG at the specified path.
@@ -172,106 +174,177 @@ def save_element_type_boxplots(
     figsize = (fixed_width, max(min_height, n_rows * row_height + 0.7))
 
     plt.figure(figsize=figsize)
-    ax = df_element_type_counts.boxplot(
-        vert=False, 
-        patch_artist=True,
-        return_type='axes',
-        showmeans=True,
-        meanline=True,
-        medianprops={'linewidth': 4, 'color': 'red', 'linestyle': 'solid'},
-        meanprops={'linewidth': 3, 'color': 'orange', 'linestyle': 'solid'},
-        widths=0.5
-        )
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)    
-    plt.title(title)
-
-    # Draw red bars for maximal values if provided
+     # Calculate x-axis max candidates early so both plot types can use consistent limits
     if max_series is not None:
-        # Ensure max_series is a Series for consistent indexing
+        # ensure Series-like
         if not hasattr(max_series, 'index'):
             import pandas as pd
             max_series = pd.Series(max_series)
-        for i, col in enumerate(df_element_type_counts.columns):
-            if col in max_series:
+        max_max = max(max_series.max(), df_element_type_counts.max().max())
+    else:
+        max_max = df_element_type_counts.max().max()
+    x_max = int(np.ceil(max_max)) if np.isfinite(max_max) else 1
+    x_right = max(1, x_max * 1.1)
+
+    # Precompute means and medians for explicit plotting (ensures markers always drawn)
+    means = df_element_type_counts.mean(skipna=True)
+    medians = df_element_type_counts.median(skipna=True)
+
+    if plot_type == "box":
+        # Use pandas boxplot (keeps your previous styling)
+        ax = df_element_type_counts.boxplot(
+            vert=False,
+            patch_artist=True,
+            return_type='axes',
+            showmeans=True,
+            meanline=True,
+            medianprops={'linewidth': 4, 'color': 'red', 'linestyle': 'solid'},
+            meanprops={'linewidth': 3, 'color': 'orange', 'linestyle': 'solid'},
+            widths=0.5
+        )
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        plt.title(title)
+
+        # Draw vertical max lines per row if provided
+        if max_series is not None:
+            for i, col in enumerate(df_element_type_counts.columns):
+                if col in max_series:
+                    max_val = max_series[col]
+                    y = i + 1  # pandas boxplot uses 1-indexed rows
+                    ax.vlines(
+                        x=max_val,
+                        ymin=y - 0.4,
+                        ymax=y + 0.4,
+                        colors='green',
+                        linestyles='--',
+                        linewidth=2,
+                        alpha=0.7,
+                        label='Max possible value' if i == 0 else None
+                    )
+
+        # Explicitly draw mean and median markers so they are always visible
+        for i, col in enumerate(df_element_type_counts.columns, start=1):
+            m = means.get(col, np.nan)
+            med = medians.get(col, np.nan)
+            if np.isfinite(m):
+                ax.plot(m, i, marker='D', color='orange', markersize=6, zorder=6, label='_nolegend_')
+            if np.isfinite(med):
+                ax.plot(med, i, marker='s', color='red', markersize=6, zorder=6, label='_nolegend_')
+
+
+
+    elif plot_type == "dot":
+        # Dot-plot: one horizontal row per column, jittered points for observations
+        ax = plt.gca()
+        cols = list(df_element_type_counts.columns)
+        # Fix vertical mapping so rows center at 1..n_rows
+        ax.set_ylim(0.5, n_rows + 0.5)
+        ax.set_autoscaley_on(False)
+
+        rng = np.random.default_rng(seed=0)
+        jitter_scale = 0.08 if n_rows <= 10 else max(0.02, 0.08 * 10 / n_rows)
+
+        for i, col in enumerate(cols, start=1):
+            data = df_element_type_counts[col].dropna().values
+            if data.size == 0:
+                continue
+            x = np.array(data, dtype=float)
+            y = np.full(x.shape, i)
+            jitter = rng.normal(0, jitter_scale, size=x.size)
+            ax.scatter(x, y + jitter, color='black', alpha=0.7, s=18, linewidths=0)
+
+            # Optional: draw a faint horizontal bar/box to indicate row band
+            ax.axhline(i, color='lightgray', linewidth=0.5, alpha=0.6)
+
+            # Draw max line for this row if provided
+            if max_series is not None and col in max_series:
                 max_val = max_series[col]
-                # Draw a vertical red line only across the corresponding row
-                # Boxplots are 1-indexed on the y-axis
-                y = i + 1
                 ax.vlines(
                     x=max_val,
-                    ymin=y - 0.4,
-                    ymax=y + 0.4,
+                    ymin=i - 0.4,
+                    ymax=i + 0.4,
                     colors='green',
                     linestyles='--',
                     linewidth=2,
                     alpha=0.7,
-                    label='Max possible value' if i == 0 else None
+                    label='Max possible value' if i == 1 else None
                 )
-        
-        # Only show legend once if any max_series is present
-        # Create a custom vertical line for the legend
-        vertical_line = mlines.Line2D([0, 0], [0, 1], color='green', linestyle='--', linewidth=2, alpha=0.7)
 
-        # Extend x-axis if needed
-        current_xlim = ax.get_xlim()
-        max_max = max(max_series.max(), df_element_type_counts.max().max())
-        if max_max > current_xlim[1]:
-            ax.set_xlim(current_xlim[0], max_max * 1.1)
-    
-    # Set x-ticks to a reasonable number of natural numbers
-    if max_series is not None:
-        x_max = max(max_series.max(), df_element_type_counts.max().max())
+        # Draw mean/median markers for dot plot
+        for i, col in enumerate(cols, start=1):
+            m = means.get(col, np.nan)
+            med = medians.get(col, np.nan)
+            if np.isfinite(m):
+                ax.plot(m, i, marker='D', color='orange', markersize=6, zorder=6)
+            if np.isfinite(med):
+                ax.plot(med, i, marker='s', color='red', markersize=6, zorder=6)
+
+        # Y ticks and labels
+        ax.set_yticks(list(range(1, n_rows + 1)))
+        ax.set_yticklabels(cols, fontsize=10)
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        plt.title(title)
+
     else:
-        x_max = int(np.ceil(df_element_type_counts.max().max()))
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=8))  # Show up to 8 integer ticks
-    ax.set_xlim(left=0, right=max(1, x_max * 1.1))
+        raise ValueError("plot_type must be 'box' or 'dot'")
+    
+    # Common formatting after plotting
+    # Set integer-friendly x-axis ticks and limit
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=8))
+    ax.set_xlim(left=0, right=x_right)
 
     if annotate_stats:
-        # Annotate mean and variance for each row (now y-axis is element type)
+        # Annotate mean and variance for each row
         for i, col in enumerate(df_element_type_counts.columns):
             data = df_element_type_counts[col].dropna()
+            if data.empty:
+                continue
             mean = data.mean()
             var = data.var()
-            #if max_series is not None and col in max_series:
-                # Use the max value from max_series for annotation
-            #    x_max = max_series[col]
-            #else:
-            #    x_max = data.max()
-            # Place the annotation to the right of the boxplot
+            # Place annotation to the right of the plotting area
             plt.text(
-                x=x_max*1.1+0.5,
-                y=i+0.6,#+1.15,  # boxplots are 1-indexed on the y-axis when horizontal
+                x=x_right + 0.5,
+                y=(i + 1) if plot_type == "box" else (i + 0.6),
                 s=f"mean: {mean:.2f}\nvar: {var:.2f}",
-                va='bottom',
+                va='center' if plot_type == "dot" else 'bottom',
                 ha='left',
                 fontsize=8
-                #bbox=dict(facecolor='white', edgecolor='none', alpha=0.7)
             )
 
-    # Create custom legend handles for mean and median
-    median_line = mlines.Line2D([], [], color='red', linewidth=4, linestyle='solid', label='Median')
-    mean_line = mlines.Line2D([], [], color='orange', linewidth=3, linestyle='solid', label='Mean')
-    handles = [mean_line, median_line]
+    # Legend: mean/median for boxplots, and max-series line if present
+    handles = []
+    if plot_type == "box":
+        median_line = mlines.Line2D([], [], color='red', linewidth=4, linestyle='solid', label='Median')
+        mean_line = mlines.Line2D([], [], color='orange', linewidth=3, linestyle='solid', label='Mean')
+        handles.extend([mean_line, median_line])
+    else:
+        # For dot plot show mean/median markers in legend if desired
+        mean_marker = mlines.Line2D([], [], color='orange', marker='D', linestyle='None', markersize=6, label='Mean')
+        median_marker = mlines.Line2D([], [], color='red', marker='s', linestyle='None', markersize=6, label='Median')
+        handles.extend([mean_marker, median_marker])
 
     if max_series is not None:
         vertical_line = mlines.Line2D([0, 0], [0, 1], color='green', linestyle='--', linewidth=2, alpha=0.7, label='Maximal number of elements')
         handles.append(vertical_line)
 
-    y_anchor = -0.4  # Adjust as needed
+    y_anchor = -0.4
     if n_rows > 5:
-        y_anchor = -0.1 
-    ax.legend(
-        handles=handles,
-        loc='upper center',
-        bbox_to_anchor=(0.5, y_anchor),  # Place legend below the axes
-        ncol=len(handles),
-        frameon=True
-    )
+        y_anchor = -0.1
+    if handles:
+        ax.legend(
+            handles=handles,
+            loc='upper center',
+            bbox_to_anchor=(0.5, y_anchor),
+            ncol=len(handles),
+            frameon=True
+        )
 
     plt.tight_layout()
+    # If annotations extend beyond figure, expand bottom as before
     if y_anchor < -0.2:
-        plt.subplots_adjust(bottom=-y_anchor)  # Increase as needed (e.g., 0.22 or 0.25)
+        plt.subplots_adjust(bottom=-y_anchor)
     plt.savefig(output_pdf_path, format='pdf')
     plt.savefig(output_pdf_path.replace('.pdf', '.png'), format='png')
     plt.close()

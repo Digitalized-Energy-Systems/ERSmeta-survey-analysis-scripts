@@ -62,12 +62,6 @@ The scripts are the main entry points for running the analysis pipeline. They ha
   This script orchestrates the analysis and visualization of survey and metadata results for the dissertation of Stephan Ferenz. It loads survey responses and metadata files, computes descriptive statistics, and generates publication-ready figures (boxplots, histograms) for inclusion in LaTeX documents. The script is designed for reproducible research and produces all outputs in a specified results directory.
 
 
-
-
-
-- `write_column.py`  
-  Helper functions for writing metadata and survey results to files.
-
 ## Main Function files
 - `compute_column_statistics.py`, `compute_metadata_statistics.py`  
   Functions for calculating statistics on survey and metadata columns.
@@ -80,6 +74,9 @@ The scripts are the main entry points for running the analysis pipeline. They ha
 
 - `print_figures.py`, `print_metadata_figures.py`  
   Contains functions for generating and saving all figures (boxplots, pie charts, bar charts) using Matplotlib.
+
+- `write_column.py`  
+  Helper functions for writing metadata and survey results to files.
 
 
 ## LaTeX Integration

@@ -62,7 +62,13 @@ parser.add_argument(
     "--metadata_input",
     type=str,
     default=None,
-    help="Path to the metadata files (default: .)"
+    help="Path to the metadata files"
+)
+parser.add_argument(
+    "--metadata_map",
+    type=str,
+    default=None,
+    help="Path to the metadata map file (columns with 1/0 per metadata set)"
 )
 parser.add_argument(
     "--output_dir",
@@ -141,27 +147,15 @@ for file_name, data in boxplots_metadata.items():
 
 #################
 # Figure: Element counts per metadata set categorized in thematical area
-# Load metadata schema
-if args.metadata_input is not None:
+if args.metadata_map is not None or args.metadata_input is not None:
     json_path = "./ersmeta_schema.json" 
+    if not os.path.isfile(json_path):
+        raise SystemExit(f"Schema file not found: {json_path}")
     with open(json_path, 'r', encoding='utf-8') as f:
         metadata_schema = json.load(f)
     element_names = list(metadata_schema['properties'].keys())
 
-    # Load all metadata JSON files from the input directory into an array
-    metadata_files = [
-        f for f in os.listdir(args.metadata_input)
-        if f != 'index.html' and os.path.isfile(os.path.join(args.metadata_input, f))
-    ]
-
-    metadata_list = []
-    for filename in metadata_files:
-        file_path = os.path.join(args.metadata_input, filename)
-        with open(file_path, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
-            metadata_list.append(metadata)
-
-    # Define thematical areas for elements
+    # Define thematical areas for elements (shared by both input methods)
     element_types = {
         'General': get_element_subset(element_names, 'name', 'inLanguage'),
         'GeneralDescription': get_element_subset(element_names, 'abstract', 'copyrightHolder'),
@@ -174,23 +168,73 @@ if args.metadata_input is not None:
         'TechnicalRequirements': get_element_subset(element_names, 'typicalHardware', 'fileSize'),
         'MetaMetadata': get_element_subset(element_names, 'metadataVersion', 'sdLicense')
     }
-    # Create a Series with the number of elements for each element type
+    element_types = dict(reversed(list(element_types.items())))
+
+    # Series with the number of elements for each element type (max possible per area)
     max_series = pd.Series({name: len(element_list) for name, element_list in element_types.items()})
 
-    # Create a DataFrame with the element counts for all element_types
-    element_type_counts = [
-        count_elements_per_metadata(element_list, metadata_list, name)
-        for name, element_list in element_types.items()
-    ]
+    # df_element_type_counts will be created by one of the branches below
+    df_element_type_counts = None
 
-    df_element_type_counts = pd.concat(element_type_counts, axis=1)   
+    # Branch A: aggregated per-element presence-map CSV (rows = element, cols = metadata sets)
+    if args.metadata_map is not None:
+        # Read CSV where first column is element name and remaining columns are file identifiers
+        # Expect a header row with file basenames; if your map has no header re-run generator with header or pass a header.
+        df_map = pd.read_csv(args.metadata_map, index_col=0, low_memory=False)
+
+        # Normalize values to 0/1 ints (tolerant to "0"/"1", True/False, NaN)
+        df_map = df_map.fillna(0)
+        # Attempt coercion: treat any non-zero/False-like as 1
+        df_map = df_map.applymap(lambda v: 1 if (str(v).strip() not in ("", "0", "False", "false", "nan", "None")) else 0).astype(int)
+
+        # Build per-file (per-metadata-set) thematic counts: rows = metadata set ids, cols = thematic areas
+        area_series_map = {}
+        for area_name, elems in element_types.items():
+            # pick only elements present in the map
+            elems_in_map = [e for e in elems if e in df_map.index]
+            if elems_in_map:
+                # sum presence across the elements for each file => Series indexed by file basename
+                s = df_map.loc[elems_in_map].sum(axis=0).astype(int)
+            else:
+                # no elements from this area in the map -> zero series with same index as df_map.columns
+                s = pd.Series(0, index=df_map.columns, dtype=int)
+            area_series_map[area_name] = s
+
+        # Compose DataFrame: index = metadata set (file basenames), columns = thematic areas
+        df_element_type_counts = pd.DataFrame(area_series_map)
+        # Ensure column order matches element_types order
+        df_element_type_counts = df_element_type_counts[list(element_types.keys())]
+
+    # Branch B: raw metadata JSON directory -> compute per-file counts per thematic area (one row per file)
+    elif args.metadata_input is not None:
+        # Load all metadata JSON files from the input directory into an array
+        metadata_files = [
+            f for f in os.listdir(args.metadata_input)
+            if f != 'index.html' and os.path.isfile(os.path.join(args.metadata_input, f))
+        ]
+
+        metadata_list = []
+        for filename in metadata_files:
+            file_path = os.path.join(args.metadata_input, filename)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+                metadata_list.append(metadata)
+
+        # Create a DataFrame with the element counts for all element_types
+        element_type_counts = [
+            count_elements_per_metadata(element_list, metadata_list, name)
+            for name, element_list in element_types.items()
+        ]
+
+        df_element_type_counts = pd.concat(element_type_counts, axis=1)   
 
     save_element_type_boxplots(
         df_element_type_counts, 
         os.path.join(args.output_dir, 'B_element_thematical_areas.pdf'), 
         max_series=max_series,
         ylabel="Thematical Areas of Elements",
-        xlabel="Filled Elements")  
+        xlabel="Filled Elements",
+        plot_type="dot")  
 
 # Figure SUS Score: Joined and Separate
 # Compute SUS scores for all, with, and without metadata experience
@@ -220,9 +264,9 @@ sus_data_with_md_experience = calculate_sus(evaluation_df_with_md_experience, co
 sus_data_without_md_experience = calculate_sus(evaluation_df_without_md_experience, columns_positive_counting)
 
 sus_dict = {
-    "All participants":sus_data_total,
+    "Participants without metadata experience": sus_data_without_md_experience,
     "Participants with metadata experience": sus_data_with_md_experience,
-    "Participants without metadata experience": sus_data_without_md_experience}
+    "All participants":sus_data_total}
 
 generate_pdf_sus(sus_dict, f"{args.output_dir}/C_SUS.pdf")
 
@@ -272,5 +316,6 @@ for file_name, data in boxplots_metadata.items():
         f"{args.output_dir}/{file_name}.pdf",
         data["columns_description"],
         couting_factor=data["columns_positive_counting"],
-        groups=data["groups"]
+        groups=data["groups"],
+        plot_type="dot"
     )
